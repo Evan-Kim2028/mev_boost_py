@@ -51,31 +51,30 @@ class ProposerPayloadFetcher:
         network (Network): The network to fetch data from. Defaults to Network.MAINNET.
         lock (Lock): A threading lock to synchronize file access.
         rate_limiter (BoundedSemaphore): A semaphore to control the rate of concurrent requests.
-        save_to_file (bool): Whether to save results to a file. Defaults to True.
     """
     start_slot: int = None
     end_slot: int = None
-    rate_limit: int = 15  # Limit to 20 requests per second
+    rate_limit: int = 15  # Limit to 15 requests per second
     filename: str = "block_payloads.json"
-    directory: str = "data"  # Default directory to save the file
+    directory: str = None  # Default to None; if set, save to this directory
     network: Network = Network.MAINNET  # Default to mainnet
     lock: Lock = field(default_factory=Lock)
     rate_limiter: BoundedSemaphore = field(init=False)
-    save_to_file: bool = True  # Option to save results to a file
 
     def __post_init__(self):
         """
-        Post-initialization to set up the rate limiter and ensure the output directory exists.
+        Post-initialization to set up the rate limiter and ensure the output directory exists if needed.
         """
-        # Initialize the semaphore for rate limiting (bounded to 20 requests at a time)
+        # Initialize the semaphore for rate limiting (bounded to 15 requests at a time)
         self.rate_limiter = BoundedSemaphore(self.rate_limit)
 
         # Check if the slot range is valid
         if self.start_slot and self.end_slot:
             assert self.end_slot > self.start_slot, "End slot must be greater than start slot."
 
-        # Ensure the output directory exists
-        self._ensure_directory()
+        # Ensure the output directory exists if specified
+        if self.directory:
+            self._ensure_directory()
 
     def _ensure_directory(self):
         """
@@ -184,7 +183,7 @@ class ProposerPayloadFetcher:
 
             while True:
                 try:
-                    for _ in range(self.rate_limit):  # Limit to 20 requests per second
+                    for _ in range(self.rate_limit):  # Limit to rate_limit requests per second
                         slot = next(slots_iter)
                         future = executor.submit(self.fetch_proposer_payloads, slot)
                         future_to_slot[future] = slot
@@ -212,8 +211,8 @@ class ProposerPayloadFetcher:
                 except StopIteration:
                     break
 
-        # Save all fetched data to the specified file
-        if self.save_to_file:
+        # Save all fetched data to the specified file if directory is provided
+        if self.directory:
             self.save_payloads_to_file(payloads_list)
 
         return payloads_list  # Return fetched data
@@ -227,7 +226,7 @@ class ProposerPayloadFetcher:
         """
         latest_url = Network.get_url(self.network)
         payloads = self.fetch_with_backoff(latest_url)
-        if payloads and self.save_to_file:
+        if payloads and self.directory:
             self.save_payloads_to_file(payloads)
 
         return payloads  # Return fetched data

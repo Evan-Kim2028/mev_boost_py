@@ -1,7 +1,7 @@
 import requests
 import json
 import concurrent.futures
-from threading import Lock, Semaphore
+from threading import Lock, BoundedSemaphore
 import time
 import argparse
 from dataclasses import dataclass, field
@@ -44,28 +44,28 @@ class ProposerPayloadFetcher:
     Attributes:
         start_slot (int): The starting slot number for fetching data. Defaults to None.
         end_slot (int): The ending slot number for fetching data. Defaults to None.
-        rate_limit (int): The rate limit for concurrent requests. Defaults to 100.
+        rate_limit (int): The rate limit for concurrent requests. Defaults to 20.
         filename (str): The name of the file to save the fetched payloads. Defaults to 'block_payloads.json'.
         directory (str): The directory to save the output file. Defaults to 'data'.
         network (Network): The network to fetch data from. Defaults to Network.MAINNET.
         lock (Lock): A threading lock to synchronize file access.
-        rate_limiter (Semaphore): A semaphore to control the rate of concurrent requests.
+        rate_limiter (BoundedSemaphore): A semaphore to control the rate of concurrent requests.
     """
     start_slot: int = None
     end_slot: int = None
-    rate_limit: int = 100
+    rate_limit: int = 15  # Limit to 20 requests per second
     filename: str = "block_payloads.json"
     directory: str = "data"  # Default directory to save the file
     network: Network = Network.MAINNET  # Default to mainnet
     lock: Lock = field(default_factory=Lock)
-    rate_limiter: Semaphore = field(init=False)
+    rate_limiter: BoundedSemaphore = field(init=False)
 
     def __post_init__(self):
         """
         Post-initialization to set up the rate limiter and ensure the output directory exists.
         """
-        # Initialize the semaphore for rate limiting
-        self.rate_limiter = Semaphore(self.rate_limit)
+        # Initialize the semaphore for rate limiting (bounded to 20 requests at a time)
+        self.rate_limiter = BoundedSemaphore(self.rate_limit)
 
         # Check if the slot range is valid
         if self.start_slot and self.end_slot:
@@ -84,6 +84,36 @@ class ProposerPayloadFetcher:
         else:
             print(f"Using existing directory {self.directory}")
 
+    def fetch_with_backoff(self, url, max_retries=5):
+        """
+        Fetch data with an exponential backoff strategy for handling rate limits.
+
+        Args:
+            url (str): The URL to fetch data from.
+            max_retries (int): The maximum number of retries if rate limited.
+
+        Returns:
+            dict: The JSON response data or None if the request failed.
+        """
+        delay = 30  # Start with a 30 second delay
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url)
+                if response.status_code == 200:
+                    return response.json()
+                elif response.status_code == 429:
+                    print(f"Rate limit exceeded. Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                else:
+                    print(f"Failed to fetch data. Status code: {response.status_code}")
+                    return None
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                return None
+        print("Max retries reached. Failed to fetch data.")
+        return None
+
     def fetch_proposer_payloads(self, slot: int) -> dict:
         """
         Fetch proposer payloads for a specific slot.
@@ -94,19 +124,9 @@ class ProposerPayloadFetcher:
         Returns:
             dict: A dictionary containing the proposer payloads or None if no data/error.
         """
-        with self.rate_limiter:  # Limit the number of concurrent requests
-            url = f"{Network.get_url(self.network)}?slot={slot}"
-            try:
-                response = requests.get(url)
-                if response.status_code == 200:
-                    payloads = response.json()
-                    return payloads if payloads else None
-                else:
-                    print(f"Failed to fetch proposer payloads for slot {slot}. Status code: {response.status_code}")
-                    return None
-            except Exception as e:
-                print(f"An error occurred while fetching slot {slot}: {e}")
-                return None
+        url = f"{Network.get_url(self.network)}?slot={slot}"
+        with self.rate_limiter:  # Ensure that only `rate_limit` requests run concurrently
+            return self.fetch_with_backoff(url)
 
     def save_payloads_to_file(self, payloads: list):
         """
@@ -149,28 +169,42 @@ class ProposerPayloadFetcher:
             "block_number": None,
         }
 
-        # Use ThreadPoolExecutor to fetch data concurrently
+        # Control the number of requests per second
+        slots = range(self.start_slot, self.end_slot)
+        slots_iter = iter(slots)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.rate_limit) as executor:
-            future_to_slot = {
-                executor.submit(self.fetch_proposer_payloads, slot): slot
-                for slot in range(self.start_slot, self.end_slot)
-            }
+            future_to_slot = {}
 
-            # Collect results as they are completed
-            for future in concurrent.futures.as_completed(future_to_slot):
-                slot = future_to_slot[future]
-                slot_data = future.result()
+            while True:
+                try:
+                    for _ in range(self.rate_limit):  # Limit to 20 requests per second
+                        slot = next(slots_iter)
+                        future = executor.submit(self.fetch_proposer_payloads, slot)
+                        future_to_slot[future] = slot
 
-                if slot_data is not None:
-                    print(f"Fetched payloads for slot {slot}")
-                    payloads_list.extend(slot_data)
-                else:
-                    print(f"No data for slot {slot}, adding null entry.")
-                    null_entry = null_entry_template.copy()
-                    null_entry["slot"] = str(slot)
-                    payloads_list.append(null_entry)
+                    # Wait for all futures to complete before starting the next batch
+                    for future in concurrent.futures.as_completed(future_to_slot):
+                        slot = future_to_slot[future]
+                        slot_data = future.result()
 
-                time.sleep(0.05)  # Maintain rate limit by pausing briefly
+                        if slot_data is not None:
+                            print(f"Fetched payloads for slot {slot}")
+                            payloads_list.extend(slot_data)
+                        else:
+                            print(f"No data for slot {slot}, adding null entry.")
+                            null_entry = null_entry_template.copy()
+                            null_entry["slot"] = str(slot)
+                            payloads_list.append(null_entry)
+
+                    # Clear the future-to-slot mapping for the next batch
+                    future_to_slot.clear()
+
+                    # Sleep for 1 second to maintain the rate limit
+                    time.sleep(1)
+
+                except StopIteration:
+                    break
 
         # Save all fetched data to the specified file
         self.save_payloads_to_file(payloads_list)
@@ -180,15 +214,9 @@ class ProposerPayloadFetcher:
         Fetch the latest 200 proposer payloads and save them to a file.
         """
         latest_url = Network.get_url(self.network)
-        try:
-            response = requests.get(latest_url)
-            if response.status_code == 200:
-                payloads = response.json()
-                self.save_payloads_to_file(payloads)
-            else:
-                print(f"Failed to fetch latest slots. Status code: {response.status_code}")
-        except Exception as e:
-            print(f"An error occurred while fetching latest slots: {e}")
+        payloads = self.fetch_with_backoff(latest_url)
+        if payloads:
+            self.save_payloads_to_file(payloads)
 
     def run(self):
         """

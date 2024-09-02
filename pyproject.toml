@@ -1,6 +1,6 @@
 [project]
 name = "mev-boost-py"
-version = "0.1.0"
+version = "0.1.1"
 description = "mev-boost python wrapper to access mev-boost data"
 authors = [
     { name = "Evan-Kim2028", email = "ekcopersonal@gmail.com" }

@@ -6,6 +6,23 @@ import time
 import argparse
 from dataclasses import dataclass, field
 import os
+from enum import Enum
+
+class Network(Enum):
+    HOLESKY = "holesky"
+    MAINNET = "mainnet"
+
+    @staticmethod
+    def get_url(network):
+        """
+        Get the URL for the specified network.
+        """
+        if network == Network.HOLESKY:
+            return "https://boost-relay-holesky.flashbots.net/relay/v1/data/bidtraces/proposer_payload_delivered"
+        elif network == Network.MAINNET:
+            return "https://boost-relay.flashbots.net/relay/v1/data/bidtraces/proposer_payload_delivered"
+        else:
+            raise ValueError("Unsupported network")
 
 @dataclass
 class ProposerPayloadFetcher:
@@ -14,6 +31,7 @@ class ProposerPayloadFetcher:
     rate_limit: int = 100
     filename: str = "block_payloads.json"
     directory: str = "data"  # Default directory to save the file
+    network: Network = Network.MAINNET  # Default to mainnet
     lock: Lock = field(default_factory=Lock)
     rate_limiter: Semaphore = field(init=False)
 
@@ -38,7 +56,7 @@ class ProposerPayloadFetcher:
         Fetch proposer payloads for a specific slot.
         """
         with self.rate_limiter:
-            url = f"https://boost-relay-holesky.flashbots.net/relay/v1/data/bidtraces/proposer_payload_delivered?slot={slot}"
+            url = f"{Network.get_url(self.network)}?slot={slot}"
             try:
                 response = requests.get(url)
                 if response.status_code == 200:
@@ -116,7 +134,7 @@ class ProposerPayloadFetcher:
         """
         Fetch the latest 200 proposer payloads.
         """
-        latest_url = "https://boost-relay-holesky.flashbots.net/relay/v1/data/bidtraces/proposer_payload_delivered"
+        latest_url = Network.get_url(self.network)
         try:
             response = requests.get(latest_url)
             if response.status_code == 200:
@@ -142,12 +160,15 @@ if __name__ == "__main__":
     parser.add_argument('--start_slot', type=int, help='Starting slot number')
     parser.add_argument('--end_slot', type=int, help='Ending slot number')
     parser.add_argument('--directory', type=str, default="data", help='Directory to save the .json file')
+    parser.add_argument('--network', type=str, choices=[n.value for n in Network], default=Network.MAINNET.value,
+                        help='Network to fetch data from (holesky or mainnet)')
 
     args = parser.parse_args()
 
     fetcher = ProposerPayloadFetcher(
         start_slot=args.start_slot,
         end_slot=args.end_slot,
-        directory=args.directory
+        directory=args.directory,
+        network=Network(args.network)
     )
     fetcher.run()

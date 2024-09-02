@@ -5,6 +5,7 @@ from threading import Lock, Semaphore
 import time
 import argparse
 from dataclasses import dataclass, field
+import os
 
 @dataclass
 class ProposerPayloadFetcher:
@@ -12,6 +13,7 @@ class ProposerPayloadFetcher:
     end_slot: int = None
     rate_limit: int = 100
     filename: str = "block_payloads.json"
+    directory: str = "data"  # Default directory to save the file
     lock: Lock = field(default_factory=Lock)
     rate_limiter: Semaphore = field(init=False)
 
@@ -19,6 +21,17 @@ class ProposerPayloadFetcher:
         self.rate_limiter = Semaphore(self.rate_limit)
         if self.start_slot and self.end_slot:
             assert self.end_slot > self.start_slot, "End slot must be greater than start slot."
+        self._ensure_directory()
+
+    def _ensure_directory(self):
+        """
+        Ensure the directory exists; create if it doesn't.
+        """
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory)
+            print(f"Created directory {self.directory}")
+        else:
+            print(f"Using existing directory {self.directory}")
 
     def fetch_proposer_payloads(self, slot: int) -> dict:
         """
@@ -45,10 +58,12 @@ class ProposerPayloadFetcher:
         if self.lock:
             self.lock.acquire()
 
+        filepath = os.path.join(self.directory, self.filename)
+
         try:
-            with open(self.filename, "w") as f:
+            with open(filepath, "w") as f:
                 json.dump(payloads, f, indent=2)
-            print(f"Payloads saved to {self.filename}")
+            print(f"Payloads saved to {filepath}")
         except Exception as e:
             print(f"An error occurred while saving to file: {e}")
         finally:
@@ -126,8 +141,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch proposer payloads for a slot range.")
     parser.add_argument('--start_slot', type=int, help='Starting slot number')
     parser.add_argument('--end_slot', type=int, help='Ending slot number')
+    parser.add_argument('--directory', type=str, default="data", help='Directory to save the .json file')
 
     args = parser.parse_args()
 
-    fetcher = ProposerPayloadFetcher(start_slot=args.start_slot, end_slot=args.end_slot)
+    fetcher = ProposerPayloadFetcher(
+        start_slot=args.start_slot,
+        end_slot=args.end_slot,
+        directory=args.directory
+    )
     fetcher.run()

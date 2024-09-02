@@ -6,7 +6,6 @@ authors = [
     { name = "Evan-Kim2028", email = "ekcopersonal@gmail.com" }
 ]
 dependencies = [
-    "marimo>=0.8.7",
     "polars>=1.6.0",
     "requests>=2.32.3",
 ]

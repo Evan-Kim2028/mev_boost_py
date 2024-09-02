@@ -9,13 +9,25 @@ import os
 from enum import Enum
 
 class Network(Enum):
+    """
+    Enum class to define supported networks for fetching proposer payloads.
+    """
     HOLESKY = "holesky"
     MAINNET = "mainnet"
 
     @staticmethod
     def get_url(network):
         """
-        Get the URL for the specified network.
+        Get the base URL for the specified network.
+
+        Args:
+            network (Network): The network enum value (HOLESKY or MAINNET).
+
+        Returns:
+            str: The base URL for the network.
+
+        Raises:
+            ValueError: If the network is not supported.
         """
         if network == Network.HOLESKY:
             return "https://boost-relay-holesky.flashbots.net/relay/v1/data/bidtraces/proposer_payload_delivered"
@@ -26,6 +38,19 @@ class Network(Enum):
 
 @dataclass
 class ProposerPayloadFetcher:
+    """
+    A class to fetch proposer payloads for Ethereum slots from the Flashbots relay.
+
+    Attributes:
+        start_slot (int): The starting slot number for fetching data. Defaults to None.
+        end_slot (int): The ending slot number for fetching data. Defaults to None.
+        rate_limit (int): The rate limit for concurrent requests. Defaults to 100.
+        filename (str): The name of the file to save the fetched payloads. Defaults to 'block_payloads.json'.
+        directory (str): The directory to save the output file. Defaults to 'data'.
+        network (Network): The network to fetch data from. Defaults to Network.MAINNET.
+        lock (Lock): A threading lock to synchronize file access.
+        rate_limiter (Semaphore): A semaphore to control the rate of concurrent requests.
+    """
     start_slot: int = None
     end_slot: int = None
     rate_limit: int = 100
@@ -36,14 +61,22 @@ class ProposerPayloadFetcher:
     rate_limiter: Semaphore = field(init=False)
 
     def __post_init__(self):
+        """
+        Post-initialization to set up the rate limiter and ensure the output directory exists.
+        """
+        # Initialize the semaphore for rate limiting
         self.rate_limiter = Semaphore(self.rate_limit)
+
+        # Check if the slot range is valid
         if self.start_slot and self.end_slot:
             assert self.end_slot > self.start_slot, "End slot must be greater than start slot."
+
+        # Ensure the output directory exists
         self._ensure_directory()
 
     def _ensure_directory(self):
         """
-        Ensure the directory exists; create if it doesn't.
+        Ensure the specified directory exists; create it if it doesn't.
         """
         if not os.path.exists(self.directory):
             os.makedirs(self.directory)
@@ -54,8 +87,14 @@ class ProposerPayloadFetcher:
     def fetch_proposer_payloads(self, slot: int) -> dict:
         """
         Fetch proposer payloads for a specific slot.
+
+        Args:
+            slot (int): The slot number to fetch data for.
+
+        Returns:
+            dict: A dictionary containing the proposer payloads or None if no data/error.
         """
-        with self.rate_limiter:
+        with self.rate_limiter:  # Limit the number of concurrent requests
             url = f"{Network.get_url(self.network)}?slot={slot}"
             try:
                 response = requests.get(url)
@@ -71,7 +110,10 @@ class ProposerPayloadFetcher:
 
     def save_payloads_to_file(self, payloads: list):
         """
-        Save proposer payloads to a .json file in a list format.
+        Save proposer payloads to a JSON file in a list format.
+
+        Args:
+            payloads (list): The list of payload entries to save.
         """
         if self.lock:
             self.lock.acquire()
@@ -90,10 +132,10 @@ class ProposerPayloadFetcher:
 
     def fetch_range(self):
         """
-        Fetch proposer payloads for a range of slots.
+        Fetch proposer payloads for a range of slots and save them to a file.
         """
-        payloads_list = []
-        null_entry_template = {
+        payloads_list = []  # List to store all fetched payloads
+        null_entry_template = {  # Template for slots with no data
             "slot": None,
             "parent_hash": None,
             "block_hash": None,
@@ -107,12 +149,14 @@ class ProposerPayloadFetcher:
             "block_number": None,
         }
 
+        # Use ThreadPoolExecutor to fetch data concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.rate_limit) as executor:
             future_to_slot = {
                 executor.submit(self.fetch_proposer_payloads, slot): slot
                 for slot in range(self.start_slot, self.end_slot)
             }
 
+            # Collect results as they are completed
             for future in concurrent.futures.as_completed(future_to_slot):
                 slot = future_to_slot[future]
                 slot_data = future.result()
@@ -126,13 +170,14 @@ class ProposerPayloadFetcher:
                     null_entry["slot"] = str(slot)
                     payloads_list.append(null_entry)
 
-                time.sleep(0.05)  # Maintain rate limit
+                time.sleep(0.05)  # Maintain rate limit by pausing briefly
 
+        # Save all fetched data to the specified file
         self.save_payloads_to_file(payloads_list)
 
     def fetch_latest(self):
         """
-        Fetch the latest 200 proposer payloads.
+        Fetch the latest 200 proposer payloads and save them to a file.
         """
         latest_url = Network.get_url(self.network)
         try:
@@ -147,15 +192,16 @@ class ProposerPayloadFetcher:
 
     def run(self):
         """
-        Run the fetch process based on provided slot range or fetch the latest.
+        Run the fetch process based on provided slot range or fetch the latest slots.
         """
         if self.start_slot is not None and self.end_slot is not None:
             self.fetch_range()
         else:
             self.fetch_latest()
 
-
+# Main entry point when running the script directly
 if __name__ == "__main__":
+    # Set up command-line argument parsing
     parser = argparse.ArgumentParser(description="Fetch proposer payloads for a slot range.")
     parser.add_argument('--start_slot', type=int, help='Starting slot number')
     parser.add_argument('--end_slot', type=int, help='Ending slot number')
@@ -163,12 +209,16 @@ if __name__ == "__main__":
     parser.add_argument('--network', type=str, choices=[n.value for n in Network], default=Network.MAINNET.value,
                         help='Network to fetch data from (holesky or mainnet)')
 
+    # Parse the command-line arguments
     args = parser.parse_args()
 
+    # Create an instance of ProposerPayloadFetcher with the provided arguments
     fetcher = ProposerPayloadFetcher(
         start_slot=args.start_slot,
         end_slot=args.end_slot,
         directory=args.directory,
         network=Network(args.network)
     )
+
+    # Run the fetch operation
     fetcher.run()

@@ -3,12 +3,13 @@ import os
 from mev_boost_py.proposer_payload import ProposerPayloadFetcher
 from mev_boost_py.proposer_payload import Network
 
+START_SLOT = 8447969
 # Fetch a 500 slot range on mainnet
 fetcher = ProposerPayloadFetcher(
     network=Network.MAINNET,
-    # 500 slot range on mainnet
-    start_slot=8447969,
-    end_slot=8448469,
+    # 150 slot range on mainnet
+    start_slot=START_SLOT,
+    end_slot=START_SLOT+150,
     directory="data/mainnet"
 )
 

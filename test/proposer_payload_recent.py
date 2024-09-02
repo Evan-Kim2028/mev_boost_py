@@ -1,11 +1,9 @@
 from mev_boost_py.proposer_payload import ProposerPayloadFetcher
 from mev_boost_py.proposer_payload import Network
 
-# Fetch last 200 slots and save to data/holesky.
 fetcher = ProposerPayloadFetcher(
-    network=Network.HOLESKY,
-    # directory="data/holesky",
-    save_to_file=False  # Do not save to file; keep data in memory
+    network=Network.HOLESKY
+    # No directory specified, so data will be kept in memory
 )
 
 # Run the fetcher to fetch data

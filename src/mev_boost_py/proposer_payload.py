@@ -7,6 +7,7 @@ import argparse
 from dataclasses import dataclass, field
 import os
 from enum import Enum
+import polars as pl  # Import Polars for DataFrame operations
 
 class Network(Enum):
     """
@@ -50,6 +51,7 @@ class ProposerPayloadFetcher:
         network (Network): The network to fetch data from. Defaults to Network.MAINNET.
         lock (Lock): A threading lock to synchronize file access.
         rate_limiter (BoundedSemaphore): A semaphore to control the rate of concurrent requests.
+        save_to_file (bool): Whether to save results to a file. Defaults to True.
     """
     start_slot: int = None
     end_slot: int = None
@@ -59,6 +61,7 @@ class ProposerPayloadFetcher:
     network: Network = Network.MAINNET  # Default to mainnet
     lock: Lock = field(default_factory=Lock)
     rate_limiter: BoundedSemaphore = field(init=False)
+    save_to_file: bool = True  # Option to save results to a file
 
     def __post_init__(self):
         """
@@ -152,7 +155,10 @@ class ProposerPayloadFetcher:
 
     def fetch_range(self):
         """
-        Fetch proposer payloads for a range of slots and save them to a file.
+        Fetch proposer payloads for a range of slots.
+
+        Returns:
+            list: The list of payload entries fetched.
         """
         payloads_list = []  # List to store all fetched payloads
         null_entry_template = {  # Template for slots with no data
@@ -207,25 +213,53 @@ class ProposerPayloadFetcher:
                     break
 
         # Save all fetched data to the specified file
-        self.save_payloads_to_file(payloads_list)
+        if self.save_to_file:
+            self.save_payloads_to_file(payloads_list)
+
+        return payloads_list  # Return fetched data
 
     def fetch_latest(self):
         """
-        Fetch the latest 200 proposer payloads and save them to a file.
+        Fetch the latest 200 proposer payloads.
+
+        Returns:
+            list: The list of payload entries fetched.
         """
         latest_url = Network.get_url(self.network)
         payloads = self.fetch_with_backoff(latest_url)
-        if payloads:
+        if payloads and self.save_to_file:
             self.save_payloads_to_file(payloads)
+
+        return payloads  # Return fetched data
 
     def run(self):
         """
         Run the fetch process based on provided slot range or fetch the latest slots.
+
+        Returns:
+            list: The list of payload entries fetched.
         """
         if self.start_slot is not None and self.end_slot is not None:
-            self.fetch_range()
+            return self.fetch_range()
         else:
-            self.fetch_latest()
+            return self.fetch_latest()
+
+    def to_polars_dataframe(self, data):
+        """
+        Convert fetched data to a Polars DataFrame.
+
+        Args:
+            data (list): The list of payload entries.
+
+        Returns:
+            pl.DataFrame: The Polars DataFrame containing the payload data.
+        """
+        if data:
+            df = pl.DataFrame(data)
+            return df
+        else:
+            print("No data available to convert.")
+            return pl.DataFrame([])
 
 # Main entry point when running the script directly
 if __name__ == "__main__":

@@ -1,20 +1,19 @@
-import os
-
 from mev_boost_py.proposer_payload import ProposerPayloadFetcher
 from mev_boost_py.proposer_payload import Network
 
 # Fetch last 200 slots and save to data/holesky.
 fetcher = ProposerPayloadFetcher(
     network=Network.HOLESKY,
-    directory="data/holesky"
+    # directory="data/holesky",
+    save_to_file=False  # Do not save to file; keep data in memory
 )
 
-# Run the fetcher to fetch and save data
-fetcher.run()
+# Run the fetcher to fetch data
+data = fetcher.run()
 
-# Output to verify if the data has been saved
-output_file_path = os.path.join(fetcher.directory, fetcher.filename)
-if os.path.exists(output_file_path):
-    print(f"Output file created successfully at: {output_file_path}")
-else:
-    print("Failed to create output file.")
+# Convert fetched data to a Polars DataFrame
+df = fetcher.to_polars_dataframe(data)
+
+# Output the DataFrame to verify the content
+print(df)
+print(df.schema)
